@@ -2,6 +2,7 @@ package ckjson
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/CKachur/ckio"
 )
@@ -31,6 +32,51 @@ func parseRunes(peekableRuneReader ckio.PeekableRuneReader, expectedRunes []rune
 		runeArray[i] = runeValue
 	}
 	return string(runeArray), nil
+}
+
+func parseString(peekableRuneReader ckio.PeekableRuneReader) (string, error) {
+	runeValue, err := peekableRuneReader.Read()
+	if err != nil {
+		return "", NewReadError(err.Error())
+	}
+	if runeValue != '"' {
+		return "", NewSyntaxError(fmt.Sprintf("expected '\"' to begin string, found '%c'", runeValue))
+	}
+
+	var stringBuilder strings.Builder
+	stringBuilder.WriteRune(runeValue)
+
+	for {
+		runeValue, err = peekableRuneReader.Peek()
+		if err != nil {
+			return stringBuilder.String(), NewReadError(err.Error())
+		}
+		switch runeValue {
+		case '"':
+			peekableRuneReader.Read()
+			stringBuilder.WriteRune(runeValue)
+			return stringBuilder.String(), nil
+		case '\\':
+			returnedString, err := parseEscapeSequence(peekableRuneReader)
+			stringBuilder.WriteString(returnedString)
+			if err != nil {
+				return stringBuilder.String(), err
+			}
+		default:
+			if isControlCharacter(runeValue) {
+				return stringBuilder.String(), NewSyntaxError(fmt.Sprintf("unexpected control character 0x%X", runeValue))
+			}
+			peekableRuneReader.Read()
+			stringBuilder.WriteRune(runeValue)
+		}
+	}
+}
+
+func isControlCharacter(runeValue rune) bool {
+	if runeValue >= 0 && runeValue <= 0x1F {
+		return true
+	}
+	return false
 }
 
 func parseEscapeSequence(peekableRuneReader ckio.PeekableRuneReader) (string, error) {

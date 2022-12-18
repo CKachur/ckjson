@@ -10,6 +10,8 @@ import (
 	"github.com/CKachur/ckio"
 )
 
+const MIN_CONTROL_RUNE rune = 0
+const MAX_CONTROL_RUNE rune = 0x1F
 const MIN_UNICODE_RUNE rune = 0
 const MAX_UNICODE_RUNE rune = 0x10FFFF
 const READ_RUNE_ERROR_EOF string = "could not read rune: EOF"
@@ -26,6 +28,57 @@ func TestParseFalseReturnsValidFalse(t *testing.T) {
 
 func TestParseNullReturnsValidNull(t *testing.T) {
 	testIndividualParseFunctionCall(t, "null", "null", "", parseNull)
+}
+
+func TestParseStringReturnsErrorForNonQuoteStart(t *testing.T) {
+	for i := MIN_UNICODE_RUNE; i <= MAX_UNICODE_RUNE; i++ {
+		if i != '"' {
+			inputString := string(i)
+			expectedErrorString := fmt.Sprintf("expected '\"' to begin string, found '%c'", i)
+			testIndividualParseFunctionCall(t, inputString, "", expectedErrorString, parseString)
+		}
+	}
+}
+
+func TestParseStringReturnsValidString(t *testing.T) {
+	testIndividualParseFunctionCall(t, "\"hello, json\"", "\"hello, json\"", "", parseString)
+	testIndividualParseFunctionCall(t, "\"\"", "\"\"", "", parseString)
+	testIndividualParseFunctionCall(t, "\"fire cat ㊋🔥😼🔥㊋\"", "\"fire cat ㊋🔥😼🔥㊋\"", "", parseString)
+}
+
+func TestParseStringReturnsValidEscapeSequenceString(t *testing.T) {
+	testIndividualParseFunctionCall(t, "\"\\\"\\\\\\/\\b\\f\\n\\r\\t\"", "\"\\\"\\\\\\/\\b\\f\\n\\r\\t\"", "", parseString)
+	testIndividualParseFunctionCall(t, "\"\\u0000\\u0000\"", "\"\\u0000\\u0000\"", "", parseString)
+	numberOfValidHexCharacters := float64(len(VALID_HEX_CHARACTERS))
+	for i := float64(0); i < math.Pow(numberOfValidHexCharacters, 4); i++ {
+		inputString := fmt.Sprintf("\"\\u%s\"", getFourCharacterHexStringById(int(i)))
+		testIndividualParseFunctionCall(t, inputString, inputString, "", parseString)
+	}
+}
+
+func TestParseStringReturnsErrorForControlCharacters(t *testing.T) {
+	for i := MIN_CONTROL_RUNE; i <= MAX_CONTROL_RUNE; i++ {
+		inputString := string([]rune{'"', i})
+		expectedOutputString := "\""
+		expectedErrorString := fmt.Sprintf("unexpected control character 0x%X", i)
+		testIndividualParseFunctionCall(t, inputString, expectedOutputString, expectedErrorString, parseString)
+	}
+}
+
+func TestIsControlCharacterReturnsTrue(t *testing.T) {
+	for i := MIN_CONTROL_RUNE; i <= MAX_CONTROL_RUNE; i++ {
+		if !isControlCharacter(i) {
+			t.Errorf("control character 0x%X should return true, got false", i)
+		}
+	}
+}
+
+func TestIsControlCharacterReturnsFalse(t *testing.T) {
+	for i := MAX_CONTROL_RUNE + 1; i <= MAX_UNICODE_RUNE; i++ {
+		if isControlCharacter(i) {
+			t.Errorf("control character 0x%X should return false, got true", i)
+		}
+	}
 }
 
 func TestParseEscapeSequenceReturnsValidEscapeSequence(t *testing.T) {
