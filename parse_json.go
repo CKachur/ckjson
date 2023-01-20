@@ -8,18 +8,18 @@ import (
 )
 
 func parseTrue(peekableRuneReader ckio.PeekableRuneReader) (string, error) {
-	return parseRunes(peekableRuneReader, []rune{'t', 'r', 'u', 'e'})
+	return parseExactRunes(peekableRuneReader, []rune{'t', 'r', 'u', 'e'})
 }
 
 func parseFalse(peekableRuneReader ckio.PeekableRuneReader) (string, error) {
-	return parseRunes(peekableRuneReader, []rune{'f', 'a', 'l', 's', 'e'})
+	return parseExactRunes(peekableRuneReader, []rune{'f', 'a', 'l', 's', 'e'})
 }
 
 func parseNull(peekableRuneReader ckio.PeekableRuneReader) (string, error) {
-	return parseRunes(peekableRuneReader, []rune{'n', 'u', 'l', 'l'})
+	return parseExactRunes(peekableRuneReader, []rune{'n', 'u', 'l', 'l'})
 }
 
-func parseRunes(peekableRuneReader ckio.PeekableRuneReader, expectedRunes []rune) (string, error) {
+func parseExactRunes(peekableRuneReader ckio.PeekableRuneReader, expectedRunes []rune) (string, error) {
 	runeArray := make([]rune, len(expectedRunes))
 	for i := 0; i < len(expectedRunes); i++ {
 		runeValue, err := peekableRuneReader.Read()
@@ -32,6 +32,143 @@ func parseRunes(peekableRuneReader ckio.PeekableRuneReader, expectedRunes []rune
 		runeArray[i] = runeValue
 	}
 	return string(runeArray), nil
+}
+
+func parseNumber(peekableRuneReader ckio.PeekableRuneReader) (string, error) {
+	var stringBuilder strings.Builder
+
+	minusString, err := parseSingleRuneIfEqual(peekableRuneReader, '-')
+	if err != nil {
+		return "", err
+	}
+	stringBuilder.WriteString(minusString)
+
+	preDecimalDigitsString, err := parsePreDecimalDigits(peekableRuneReader)
+	stringBuilder.WriteString(preDecimalDigitsString)
+	if err != nil {
+		return stringBuilder.String(), err
+	}
+
+	runeValue, peekErr := peekableRuneReader.Peek()
+	shouldCheckPeekErrorAgain := false
+	if peekErr != nil {
+		return stringBuilder.String(), nil
+	}
+	if runeValue == '.' {
+		decimalString, err := parseSingleRuneIfEqual(peekableRuneReader, '.')
+		stringBuilder.WriteString(decimalString)
+		if err != nil {
+			return stringBuilder.String(), err
+		}
+
+		digitString := parseMultipleRunesIfInRange(peekableRuneReader, '0', '9')
+		if digitString == "" {
+			return stringBuilder.String(), NewSyntaxError("expected digit in number after decimal")
+		}
+		stringBuilder.WriteString(digitString)
+
+		runeValue, peekErr = peekableRuneReader.Peek()
+		shouldCheckPeekErrorAgain = true
+	}
+
+	if shouldCheckPeekErrorAgain && peekErr != nil {
+		return stringBuilder.String(), nil
+	}
+	if runeValue == 'e' || runeValue == 'E' {
+		exponentString, err := parseExponent(peekableRuneReader)
+		stringBuilder.WriteString(exponentString)
+		if err != nil {
+			return stringBuilder.String(), err
+		}
+	}
+
+	return stringBuilder.String(), nil
+}
+
+func parseExponent(peekableRuneReader ckio.PeekableRuneReader) (string, error) {
+	var stringBuilder strings.Builder
+
+	runeValue, err := peekableRuneReader.Peek()
+	if err != nil {
+		return "", NewReadError(err.Error())
+	}
+	if runeValue != 'e' && runeValue != 'E' {
+		return "", NewSyntaxError(fmt.Sprintf("expected 'e' or 'E', found '%c'", runeValue))
+	}
+	peekableRuneReader.Read()
+	stringBuilder.WriteRune(runeValue)
+
+	runeValue, err = peekableRuneReader.Peek()
+	if err != nil {
+		return stringBuilder.String(), NewReadError(err.Error())
+	}
+	hasSign := false
+	if runeValue == '+' || runeValue == '-' {
+		hasSign = true
+		peekableRuneReader.Read()
+		stringBuilder.WriteRune(runeValue)
+	}
+
+	digitString := parseMultipleRunesIfInRange(peekableRuneReader, '0', '9')
+	if digitString == "" {
+		if !hasSign {
+			return stringBuilder.String(), NewSyntaxError("expected '+', '-', or digit in exponent")
+		}
+		return stringBuilder.String(), NewSyntaxError("expected digit in exponent")
+	}
+	stringBuilder.WriteString(digitString)
+
+	return stringBuilder.String(), nil
+}
+
+func parsePreDecimalDigits(peekableRuneReader ckio.PeekableRuneReader) (string, error) {
+	var stringBuilder strings.Builder
+
+	runeValue, err := peekableRuneReader.Peek()
+	if err != nil {
+		return "", NewReadError(err.Error())
+	}
+	switch runeValue {
+	case '0':
+		peekableRuneReader.Read()
+		stringBuilder.WriteRune(runeValue)
+		return stringBuilder.String(), nil
+	case '1', '2', '3', '4', '5', '6', '7', '8', '9':
+		digitString := parseMultipleRunesIfInRange(peekableRuneReader, '0', '9')
+		stringBuilder.WriteString(digitString)
+		return stringBuilder.String(), nil
+	default:
+		return stringBuilder.String(), NewSyntaxError(fmt.Sprintf("expected digit, found '%c'", runeValue))
+	}
+}
+
+func parseSingleRuneIfEqual(peekableRuneReader ckio.PeekableRuneReader, expectedRune rune) (string, error) {
+	runeValue, err := peekableRuneReader.Peek()
+	if err != nil {
+		return "", NewReadError(err.Error())
+	}
+	if runeValue == expectedRune {
+		peekableRuneReader.Read()
+		return string(runeValue), nil
+	}
+	return "", nil
+}
+
+func parseMultipleRunesIfInRange(peekableRuneReader ckio.PeekableRuneReader, runeRangeStart, runeRangeEnd rune) string {
+	var stringBuilder strings.Builder
+	for {
+		runeValue, err := peekableRuneReader.Peek()
+		if err != nil {
+			return stringBuilder.String()
+		}
+		if runeRangeStart <= runeValue && runeValue <= runeRangeEnd {
+			peekableRuneReader.Read()
+			stringBuilder.WriteRune(runeValue)
+		} else {
+			break
+		}
+	}
+	return stringBuilder.String()
 }
 
 func parseString(peekableRuneReader ckio.PeekableRuneReader) (string, error) {
@@ -73,7 +210,7 @@ func parseString(peekableRuneReader ckio.PeekableRuneReader) (string, error) {
 }
 
 func isControlCharacter(runeValue rune) bool {
-	if runeValue >= 0 && runeValue <= 0x1F {
+	if 0 <= runeValue && runeValue <= 0x1F {
 		return true
 	}
 	return false
@@ -119,10 +256,7 @@ func parseHexadecimalCodePoint(peekableRuneReader ckio.PeekableRuneReader) (stri
 }
 
 func isHexadecimalCharacter(runeValue rune) bool {
-	switch runeValue {
-	case '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f', 'A', 'B', 'C', 'D', 'E', 'F':
-		return true
-	default:
-		return false
-	}
+	return ('0' <= runeValue && runeValue <= '9') ||
+		('a' <= runeValue && runeValue <= 'f') ||
+		('A' <= runeValue && runeValue <= 'F')
 }
